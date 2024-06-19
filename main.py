@@ -1,9 +1,16 @@
 import sys
+import os
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QPushButton, QApplication, QLabel,
                              QDesktopWidget, QHBoxLayout, QListWidgetItem, QSplitter, QListWidget, QFileDialog,
                              QLineEdit)
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QPixmap, QPalette, QBrush, QIcon
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes
+
 
 class NodeItem(QListWidgetItem):
     def __init__(self, name, is_online=True):
@@ -11,6 +18,7 @@ class NodeItem(QListWidgetItem):
         # Set the icon based on the online status
         icon_path = '/home/mete/Downloads/green.png' if is_online else '/home/mete/Downloads/red.png'
         self.setIcon(QIcon(icon_path))
+
 
 class FileDropArea(QLabel):
     def __init__(self, parent=None):
@@ -51,6 +59,7 @@ class FileDropArea(QLabel):
         if fname:
             self.emit_file_dropped(fname)
 
+
 class DashboardWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -60,11 +69,10 @@ class DashboardWindow(QMainWindow):
         self.initUI()
 
     def initUI(self):
-        pixmap = QPixmap('/home/mete/Downloads/fileuploadback.jpg')  # Replace with your image file path
+        pixmap = QPixmap('/home/mete/Downloads/fileuploadback.jpg')
         palette = QPalette()
         palette.setBrush(QPalette.Window, QBrush(pixmap))
         self.setPalette(palette)
-
 
         self.centralWidget = QWidget(self)
         self.setCentralWidget(self.centralWidget)
@@ -120,6 +128,37 @@ class DashboardWindow(QMainWindow):
 
         self.populateNodes()
 
+        # Additional small file drop area
+        self.smallFileDropArea = FileDropArea(self)
+        small_drop_area_size = QSize(200, 100)  # Adjust the size as needed
+        self.smallFileDropArea.setFixedSize(small_drop_area_size)
+        self.smallFileDropArea.move(
+            self.width() - small_drop_area_size.width() - 20,  # Adjust position as needed
+            self.height() - small_drop_area_size.height() - 100  # Leave space for the "Get File" button
+        )
+
+        # "Get File" button
+        self.getFileButton = QPushButton('Get File', self)
+        self.getFileButton.setFixedSize(200, 40)  # Match width of the small file drop area
+        self.getFileButton.move(
+            self.smallFileDropArea.x(),
+            self.smallFileDropArea.y() + self.smallFileDropArea.height() + 10  # Position below the small file drop area
+        )
+        self.getFileButton.setStyleSheet("""
+                   QPushButton {
+                       background-color: #28a745;  /* A green color for the "Get File" button */
+                       color: white;
+                       font-size: 18px;
+                       border-radius: 10px;
+                   }
+                   QPushButton:hover {
+                       background-color: #34d058;
+                   }
+               """)
+
+        # Connect the "Get File" button to its functionality
+        self.getFileButton.clicked.connect(self.on_get_file_button_clicked)
+
         # Send button setup
         self.sendButton = QPushButton('Send', self)
         self.sendButton.setFixedSize(drop_area_width, 100)  # Match width of file drop area
@@ -137,12 +176,89 @@ class DashboardWindow(QMainWindow):
         """)
         self.sendButton.clicked.connect(self.on_send_button_clicked)
 
+        self.registerButton = QPushButton('Register', self)
+        self.registerButton.setStyleSheet("""
+                    QPushButton {
+                        background-color: #FFA500;  /* Orange color */
+                        color: white;
+                        font-size: 18px;
+                        border-radius: 10px;
+                    }
+                    QPushButton:hover {
+                        background-color: #FFB347;  /* Lighter orange on hover */
+                    }
+                """)
+        self.registerButton.setFixedSize(200, 40)
+        self.registerButton.move(self.width() - self.registerButton.width() - 20, 20)  # Top right corner
+        self.registerButton.clicked.connect(self.on_register_button_clicked)  # Connect to a method to handle clicks
+
         # Add splitter to the layout
         layout.addWidget(splitter, Qt.AlignCenter)
         layout.addWidget(self.sendButton, Qt.AlignCenter)
 
         # Ensure splitter expands fully
         splitter.setSizes([drop_area_width, nodeListWidth])
+
+
+    def encrypt_file(public_key_path, input_file_path, output_file_path):
+        # Load the recipient's public key
+        with open(public_key_path, 'rb') as key_file:
+            public_key = serialization.load_pem_public_key(key_file.read())
+
+        # Read the input file
+        with open(input_file_path, 'rb') as f:
+            plaintext = f.read()
+
+        # Encrypt the plaintext using the public key
+        ciphertext = public_key.encrypt(
+            plaintext,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+
+        # Write the ciphertext to the output file
+        with open(output_file_path, 'wb') as f:
+            f.write(ciphertext)
+
+    # Example usage
+    #encrypt_file('recipient_public_key.pem', 'input.pdf', 'encrypted_file.enc')
+
+
+
+    def decrypt_file(private_key_path, input_file_path, output_file_path, password):
+        # Load the recipient's encrypted private key
+        with open(private_key_path, 'rb') as key_file:
+            encrypted_private_key = key_file.read()
+
+        # Decrypt the private key using the password
+        private_key = serialization.load_pem_private_key(
+            encrypted_private_key,
+            password=password.encode()
+        )
+
+        # Read the encrypted file
+        with open(input_file_path, 'rb') as f:
+            ciphertext = f.read()
+
+        # Decrypt the ciphertext using the private key
+        plaintext = private_key.decrypt(
+            ciphertext,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+
+        # Write the plaintext to the output file
+        with open(output_file_path, 'wb') as f:
+            f.write(plaintext)
+
+    # Example usage
+    #decrypt_file('recipient_private_key.pem', 'encrypted_file.enc', 'decrypted_file.pdf', 'mypassword')
 
     def addNode(self, name, is_online):
         node_item = NodeItem(name, is_online)
@@ -163,6 +279,14 @@ class DashboardWindow(QMainWindow):
         self.addNode("Node 3", True)
         self.addNode("Node 4", True)
         self.addNode("Node 5", False)
+
+    def on_get_file_button_clicked(self):
+        print("Get File button clicked")
+
+    def on_register_button_clicked(self):
+        self.register_window = RegisterWindow()  # Create the Register window
+        self.register_window.show()  # Show the Register window
+        self.hide()
 
 
 class RegisterWindow(QWidget):
@@ -217,6 +341,7 @@ class RegisterWindow(QWidget):
                 background-color: #34d058;
             }
         """)
+        self.registerButton.clicked.connect(self.on_register_button_clicked)
 
         # Adding widgets to the layout
         mainLayout.addStretch(1)
@@ -245,6 +370,51 @@ class RegisterWindow(QWidget):
         qr.moveCenter(cp)
         self.move(qr.topLeft())
 
+    def on_register_button_clicked(self):
+        nickname = self.nicknameInput.text()
+        email = self.emailInput.text()
+        password = self.passwordInput.text()
+
+        # Call function to generate asymmetric key pair
+        self.generate_asymmetric_key_pair(nickname, email, password)
+
+        print(f"Registered with nickname: {nickname}, email: {email}")
+        self.dashboard = DashboardWindow()  # Create an instance of the DashboardWindow
+        self.dashboard.show()  # Show the dashboard
+        self.hide()  # Hide the registration window
+
+    def generate_asymmetric_key_pair(self, nickname, email, password):
+        # Generate the RSA key pair
+        private_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048,
+            backend=default_backend()
+        )
+
+        public_key = private_key.public_key()
+
+        # Serialize and save the private key
+        private_key_pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.BestAvailableEncryption(password.encode())
+        )
+
+        with open(f"{nickname}_private_key.pem", 'wb') as f:
+            f.write(private_key_pem)
+
+        # Serialize and save the public key
+        public_key_pem = public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+
+        with open(f"{nickname}_public_key.pem", 'wb') as f:
+            f.write(public_key_pem)
+
+        print(f"Asymmetric key pair generated for {nickname}")
+
+
 class LoginWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -269,7 +439,7 @@ class LoginWindow(QWidget):
         inputContainer.setSpacing(3)  # Reduce space between widgets
 
         # Add padding inside the input container
-        inputContainer.setContentsMargins(90,150,60, 50) # Left, Top, Right, Bottom
+        inputContainer.setContentsMargins(90, 150, 60, 50)  # Left, Top, Right, Bottom
 
         # Email input
         self.emailInput = QLineEdit()
@@ -361,7 +531,6 @@ class LoginWindow(QWidget):
 
         self.setLayout(mainLayout)
 
-
     def on_login_button_clicked(self):
         # Placeholder function for logging in logic
         print("Login button clicked")
@@ -380,11 +549,14 @@ class LoginWindow(QWidget):
         self.register_window.show()  # Show the Register window
         self.hide()
 
+
 def main():
     app = QApplication(sys.argv)
     login = LoginWindow()  # Start with the Login window
     login.show()
     sys.exit(app.exec_())
 
+
 if __name__ == '__main__':
     main()
+
