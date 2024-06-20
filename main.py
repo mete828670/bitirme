@@ -1,5 +1,7 @@
 import sys
 import os
+import subprocess
+from getpass import getpass
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QPushButton, QApplication, QLabel,
                              QDesktopWidget, QHBoxLayout, QListWidgetItem, QSplitter, QListWidget, QFileDialog,
                              QLineEdit)
@@ -10,6 +12,79 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes
+
+import sys
+import os
+import subprocess
+from getpass import getpass
+import platform
+
+
+def check_and_install_ipfs():
+    global IPFS_PATH
+    os_name = platform.system()
+
+    if os_name == 'Linux':
+        IPFS_PATH = '/usr/local/bin/ipfs'  # Default path for Linux
+        install_commands = [
+            "wget https://dist.ipfs.io/go-ipfs/v0.8.0/go-ipfs_v0.8.0_linux-amd64.tar.gz -O /tmp/go-ipfs.tar.gz",
+            "tar -xvzf /tmp/go-ipfs.tar.gz -C /tmp",
+            "sudo bash /tmp/go-ipfs/install.sh"
+        ]
+    elif os_name == 'Windows':
+        IPFS_PATH = 'C:\\Program Files\\IPFS\\ipfs.exe'  # Default path for Windows
+        install_commands = [
+            "curl -o go-ipfs.zip https://dist.ipfs.io/go-ipfs/v0.8.0/go-ipfs_v0.8.0_windows-amd64.zip",
+            "tar -xf go-ipfs.zip",
+            "move go-ipfs C:\\Program Files\\IPFS",
+            "setx PATH \"%PATH%;C:\\Program Files\\IPFS\""
+        ]
+    else:
+        print(f"Unsupported operating system: {os_name}")
+        sys.exit(1)
+
+    # Check if IPFS is installed
+    try:
+        result = subprocess.run(['which', 'ipfs'] if os_name == 'Linux' else ['where', 'ipfs'], check=True,
+                                capture_output=True, text=True)
+        IPFS_PATH = result.stdout.strip()
+        print(f"IPFS is already installed at {IPFS_PATH}.")
+    except subprocess.CalledProcessError:
+        print("IPFS is not installed. Installing IPFS...")
+        try:
+            if os_name == 'Linux':
+                sudo_password = getpass("Enter sudo password: ")
+                for cmd in install_commands:
+                    if 'sudo' in cmd:
+                        cmd = f"echo {sudo_password} | sudo -S {cmd[5:]}"
+                    subprocess.run(cmd, shell=True, check=True)
+            else:
+                for cmd in install_commands:
+                    subprocess.run(cmd, shell=True, check=True)
+
+            result = subprocess.run(['which', 'ipfs'] if os_name == 'Linux' else ['where', 'ipfs'], check=True,
+                                    capture_output=True, text=True)
+            IPFS_PATH = result.stdout.strip()
+            print("IPFS installed successfully.")
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to install IPFS: {e}")
+            sys.exit(1)
+
+    # Initialize the IPFS node
+    try:
+        subprocess.run([IPFS_PATH, 'init'], check=True)
+        print("IPFS node initialized.")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to initialize IPFS node: {e}")
+        sys.exit(1)
+
+    # Start the IPFS daemon
+    try:
+        subprocess.Popen([IPFS_PATH, 'daemon'])
+        print("IPFS daemon started.")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to start IPFS daemon: {e}")
+        sys.exit(1)
 
 
 class NodeItem(QListWidgetItem):
@@ -199,7 +274,6 @@ class DashboardWindow(QMainWindow):
         # Ensure splitter expands fully
         splitter.setSizes([drop_area_width, nodeListWidth])
 
-
     def encrypt_file(public_key_path, input_file_path, output_file_path):
         # Load the recipient's public key
         with open(public_key_path, 'rb') as key_file:
@@ -224,9 +298,7 @@ class DashboardWindow(QMainWindow):
             f.write(ciphertext)
 
     # Example usage
-    #encrypt_file('recipient_public_key.pem', 'input.pdf', 'encrypted_file.enc')
-
-
+    # encrypt_file('recipient_public_key.pem', 'input.pdf', 'encrypted_file.enc')
 
     def decrypt_file(private_key_path, input_file_path, output_file_path, password):
         # Load the recipient's encrypted private key
@@ -258,7 +330,7 @@ class DashboardWindow(QMainWindow):
             f.write(plaintext)
 
     # Example usage
-    #decrypt_file('recipient_private_key.pem', 'encrypted_file.enc', 'decrypted_file.pdf', 'mypassword')
+    # decrypt_file('recipient_private_key.pem', 'encrypted_file.enc', 'decrypted_file.pdf', 'mypassword')
 
     def addNode(self, name, is_online):
         node_item = NodeItem(name, is_online)
@@ -551,11 +623,12 @@ class LoginWindow(QWidget):
 
 
 def main():
+    check_and_install_ipfs()  # Ensure IPFS is installed and initialized before starting the app
+
     app = QApplication(sys.argv)
     login = LoginWindow()  # Start with the Login window
     login.show()
     sys.exit(app.exec_())
-
 
 if __name__ == '__main__':
     main()
