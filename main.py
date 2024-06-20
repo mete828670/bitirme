@@ -70,13 +70,18 @@ def check_and_install_ipfs():
             print(f"Failed to install IPFS: {e}")
             sys.exit(1)
 
-    # Initialize the IPFS node
+    # Check if IPFS repository is initialized
     try:
-        subprocess.run([IPFS_PATH, 'init'], check=True)
-        print("IPFS node initialized.")
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to initialize IPFS node: {e}")
-        sys.exit(1)
+        result = subprocess.run([IPFS_PATH, 'config', 'Identity.PeerID'], check=True, capture_output=True, text=True)
+        print("IPFS is already initialized. Skipping initialization.")
+    except subprocess.CalledProcessError:
+        # Initialize the IPFS node if not already initialized
+        try:
+            subprocess.run([IPFS_PATH, 'init'], check=True)
+            print("IPFS node initialized.")
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to initialize IPFS node: {e}")
+            sys.exit(1)
 
     # Start the IPFS daemon
     try:
@@ -85,6 +90,7 @@ def check_and_install_ipfs():
     except subprocess.CalledProcessError as e:
         print(f"Failed to start IPFS daemon: {e}")
         sys.exit(1)
+
 
 
 class NodeItem(QListWidgetItem):
