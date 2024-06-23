@@ -1,7 +1,28 @@
 import sys
 import os
 import subprocess
+import json
+import pyodbc
+from hashlib import sha256
 from getpass import getpass
+from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QPushButton, QApplication, QLabel,
+                             QDesktopWidget, QHBoxLayout, QListWidgetItem, QSplitter, QListWidget, QFileDialog,
+                             QLineEdit, QProgressBar)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
+from PyQt5.QtGui import QPixmap, QPalette, QBrush, QIcon
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.kdf.concatkdf import ConcatKDFHash
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import padding as sym_padding
+import platform
+import time
+import base64
+import secrets
 
 def install_package(package_name):
     try:
@@ -22,20 +43,6 @@ install_package('libxcb-xinerama0')
 # Unset environment variables to avoid conflicts
 os.environ.pop('QT_QPA_PLATFORM_PLUGIN_PATH', None)
 os.environ.pop('QT_PLUGIN_PATH', None)
-
-from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QPushButton, QApplication, QLabel,
-                             QDesktopWidget, QHBoxLayout, QListWidgetItem, QSplitter, QListWidget, QFileDialog,
-                             QLineEdit, QProgressBar)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
-from PyQt5.QtGui import QPixmap, QPalette, QBrush, QIcon
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives import hashes
-
-import platform
-import time
 
 class SplashScreen(QWidget):
     update_log = pyqtSignal(str)
@@ -107,6 +114,7 @@ class SplashScreen(QWidget):
 class IPFSInitializer(QThread):
     log_signal = pyqtSignal(str)
     progress_signal = pyqtSignal(int)
+    ipfs_process = None
 
     def run(self):
         os_name = platform.system()
@@ -117,7 +125,7 @@ class IPFSInitializer(QThread):
         if os_name == 'Linux':
             IPFS_PATH = '/usr/local/bin/ipfs'
             install_commands = [
-                "wget https://dist.ipfs.io/go-ipfs/v0.8.0/go-ipfs_v0.8.0_linux-amd64.tar.gz -O /tmp/go-ipfs.tar.gz",
+                "wget https://dist.ipfs.io/go-ipfs/v0.16.0/go-ipfs_v0.16.0_linux-amd64.tar.gz -O /tmp/go-ipfs.tar.gz",
                 "tar -xvzf /tmp/go-ipfs.tar.gz -C /tmp",
                 "sudo bash /tmp/go-ipfs/install.sh"
             ]
@@ -148,45 +156,36 @@ class IPFSInitializer(QThread):
                 self.progress_signal.emit(100)
                 return
 
-        # Check if IPFS daemon is running
+        # Run migration tool if needed
         try:
-            result = subprocess.run([IPFS_PATH, 'id'], capture_output=True, text=True)
+            self.log_signal.emit("Running IPFS migration tool...")
+            result = subprocess.run([IPFS_PATH, 'repo', 'migrate'], capture_output=True, text=True, timeout=300)
             if result.returncode == 0:
-                self.log_signal.emit("IPFS daemon is already running.")
-                self.progress_signal.emit(60)
-                self.verify_ipfs(IPFS_PATH)  # Run verification tests
-                return
-        except subprocess.CalledProcessError:
-            self.log_signal.emit("IPFS daemon is not running. Initializing IPFS...")
-
-        # Improved initialization check with detailed error logging
-        try:
-            result = subprocess.run([IPFS_PATH, 'init'], capture_output=True, text=True)
-            if result.returncode == 0:
-                self.log_signal.emit("IPFS initialized successfully.")
-                self.progress_signal.emit(80)
-            elif 'ipfs configuration file already exists' in result.stderr:
-                self.log_signal.emit("IPFS is already initialized.")
-                self.progress_signal.emit(80)
+                self.log_signal.emit("IPFS repository migration successful.")
             else:
-                self.log_signal.emit(f"Failed to initialize IPFS node: {result.stderr}")
+                self.log_signal.emit(f"Failed to migrate IPFS repository: {result.stderr}")
                 self.progress_signal.emit(100)
                 return
+        except subprocess.TimeoutExpired:
+            self.log_signal.emit("IPFS migration tool timed out.")
+            self.progress_signal.emit(100)
+            return
         except subprocess.CalledProcessError as e:
-            self.log_signal.emit(f"Failed to initialize IPFS node: {e}")
+            self.log_signal.emit(f"Failed to run IPFS migration tool: {e}")
             self.progress_signal.emit(100)
             return
 
         # Start the IPFS daemon
         try:
-            result = subprocess.Popen([IPFS_PATH, 'daemon'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            time.sleep(5)  # Give some time for the daemon to start
-            if result.poll() is None:
+            self.log_signal.emit("Starting IPFS daemon...")
+            self.ipfs_process = subprocess.Popen([IPFS_PATH, 'daemon'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            time.sleep(3)  # Give some time for the daemon to start
+            if self.ipfs_process.poll() is None:
                 self.log_signal.emit("IPFS daemon started successfully.")
                 self.progress_signal.emit(100)
                 self.verify_ipfs(IPFS_PATH)  # Run verification tests
             else:
-                stderr = result.stderr.read().decode()
+                stderr = self.ipfs_process.stderr.read().decode()
                 if 'daemon is running' in stderr:
                     self.log_signal.emit("IPFS daemon is already running.")
                     self.verify_ipfs(IPFS_PATH)  # Run verification tests
@@ -220,23 +219,40 @@ class IPFSInitializer(QThread):
                 f.write("Hello IPFS")
 
             result = subprocess.run([ipfs_path, 'add', test_file_path], capture_output=True, text=True)
-            cid = result.stdout.split()[1]
-            self.log_signal.emit(f"Added test file with CID: {cid}")
+            if result.returncode == 0 and "added" in result.stdout:
+                cid = result.stdout.split()[1]
+                self.log_signal.emit(f"Added test file with CID: {cid}")
 
-            result = subprocess.run([ipfs_path, 'cat', cid], capture_output=True, text=True)
-            self.log_signal.emit(f"Retrieved test file content: {result.stdout.strip()}")
+                result = subprocess.run([ipfs_path, 'cat', cid], capture_output=True, text=True)
+                if result.returncode == 0:
+                    self.log_signal.emit(f"Retrieved test file content: {result.stdout.strip()}")
 
-            # Unpin the file to remove it from the local storage
-            subprocess.run([ipfs_path, 'pin', 'rm', cid], capture_output=True, text=True)
-            subprocess.run([ipfs_path, 'repo', 'gc'], capture_output=True, text=True)
-            self.log_signal.emit(f"Removed test file with CID: {cid}")
+                    # Unpin the file to remove it from the local storage
+                    subprocess.run([ipfs_path, 'pin', 'rm', cid], capture_output=True, text=True)
+                    subprocess.run([ipfs_path, 'repo', 'gc'], capture_output=True, text=True)
+                    self.log_signal.emit(f"Removed test file with CID: {cid}")
 
-            # Clean up the test file
-            os.remove(test_file_path)
+                    # Clean up the test file
+                    os.remove(test_file_path)
+                else:
+                    self.log_signal.emit(f"Failed to retrieve test file: {result.stderr}")
+            else:
+                self.log_signal.emit("Failed to add test file: Invalid IPFS add output")
 
         except subprocess.CalledProcessError as e:
             self.log_signal.emit(f"Failed to add, retrieve, or remove test file: {e}")
 
+    def stop_ipfs_daemon(self):
+        if self.ipfs_process and self.ipfs_process.poll() is None:
+            self.log_signal.emit("Stopping IPFS daemon...")
+            self.ipfs_process.terminate()
+            try:
+                self.ipfs_process.wait(timeout=10)
+                self.log_signal.emit("IPFS daemon stopped successfully.")
+            except subprocess.TimeoutExpired:
+                self.log_signal.emit("IPFS daemon did not stop in time, killing process...")
+                self.ipfs_process.kill()
+                self.log_signal.emit("IPFS daemon killed.")
 
 
 
@@ -246,12 +262,12 @@ class NodeItem(QListWidgetItem):
         icon_path = '/home/mete/Downloads/green.png' if is_online else '/home/mete/Downloads/red.png'
         self.setIcon(QIcon(icon_path))
 
-
 class FileDropArea(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAlignment(Qt.AlignCenter)
         self.setAcceptDrops(True)
+        self.file_path = None
         upload_icon_path = '/home/mete/Downloads/file_icon.png'
         self.setPixmap(QPixmap(upload_icon_path).scaled(64, 64, Qt.KeepAspectRatio))
         self.setStyleSheet("""
@@ -272,7 +288,8 @@ class FileDropArea(QLabel):
             event.acceptProposedAction()
             for url in event.mimeData().urls():
                 if url.isLocalFile():
-                    self.emit_file_dropped(url.toLocalFile())
+                    self.file_path = url.toLocalFile()
+                    self.emit_file_dropped(self.file_path)
 
     def emit_file_dropped(self, filepath):
         print(f"File dropped: {filepath}")
@@ -284,8 +301,8 @@ class FileDropArea(QLabel):
     def choose_file(self):
         fname, _ = QFileDialog.getOpenFileName(self, 'Open file', '/home', "All files (*)")
         if fname:
+            self.file_path = fname
             self.emit_file_dropped(fname)
-
 
 class DashboardWindow(QMainWindow):
     def __init__(self):
@@ -315,7 +332,6 @@ class DashboardWindow(QMainWindow):
 
         self.searchBar = QLineEdit(self)
         self.searchBar.setPlaceholderText("Search nodes...")
-        self.searchBar
         self.searchBar.setStyleSheet("""
                    QLineEdit {
                        background-color: rgba(255, 255, 255, 0.5);
@@ -414,66 +430,118 @@ class DashboardWindow(QMainWindow):
         layout.addWidget(self.sendButton, Qt.AlignCenter)
         splitter.setSizes([drop_area_width, nodeListWidth])
 
-    def encrypt_file(self, public_key_path, input_file_path, output_file_path):
-        with open(public_key_path, 'rb') as key_file:
-            public_key = serialization.load_pem_public_key(key_file.read())
-
-        with open(input_file_path, 'rb') as f:
-            plaintext = f.read()
-
-        ciphertext = public_key.encrypt(
-            plaintext,
-            padding.OAEP(
-                mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None
-            )
-        )
-
-        with open(output_file_path, 'wb') as f:
-            f.write(ciphertext)
-
-    def decrypt_file(self, private_key_path, input_file_path, output_file_path, password):
-        with open(private_key_path, 'rb') as key_file:
-            encrypted_private_key = key_file.read()
-
-        private_key = serialization.load_pem_private_key(
-            encrypted_private_key,
-            password=password.encode()
-        )
-
-        with open(input_file_path, 'rb') as f:
-            ciphertext = f.read()
-
-        plaintext = private_key.decrypt(
-            ciphertext,
-            padding.OAEP(
-                mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None
-            )
-        )
-
-        with open(output_file_path, 'wb') as f:
-            f.write(plaintext)
+    def centerWindow(self):
+        centerPoint = QDesktopWidget().availableGeometry().center()
+        self.move(centerPoint.x() - self.width() // 2, centerPoint.y() - self.height() // 2)
 
     def addNode(self, name, is_online):
         node_item = NodeItem(name, is_online)
         self.nodeList.addItem(node_item)
 
-    def centerWindow(self):
-        centerPoint = QDesktopWidget().availableGeometry().center()
-        self.move(centerPoint.x() - self.width() // 2, centerPoint.y() - self.height() // 2)
-
     def on_send_button_clicked(self):
-        print("Send button clicked")
+        selected_item = self.nodeList.currentItem()
+        if selected_item:
+            node_name = selected_item.text()
+            # Get node details from database
+            user_details = self.get_user_details(node_name)
+            if user_details:
+                public_key_path = user_details[-1]
+                file_path = self.fileDropArea.file_path
+                if file_path:
+                    encrypted_file_path = file_path + ".enc"
+                    aes_key_file_path = encrypted_file_path + ".key"
+                    self.encrypt_file(public_key_path, file_path, encrypted_file_path, aes_key_file_path)
+                    cid = self.upload_to_ipfs(encrypted_file_path)
+                    json_file_path = self.create_json_file(cid, "mete", 0)
+                    print(f"JSON file created at: {json_file_path}")
+                else:
+                    print("No file selected")
+            else:
+                print("Node details not found")
+        else:
+            print("No node selected")
 
-    def populateNodes(self):
-        self.addNode("Node 1", True)
-        self.addNode("Node 2", False)
-        self.addNode("Node 3", True)
-        self.addNode("Node 4", True)
-        self.addNode("Node 5", False)
+    def get_user_details(self, nickname):
+        conn = pyodbc.connect('DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM [User] WHERE nickname = ?", nickname)
+        row = cursor.fetchone()
+        conn.close()
+        return row
+
+    def encrypt_file(self, public_key_path, input_file_path, output_file_path, aes_key_file_path):
+        try:
+            # Generate a random AES key
+            aes_key = secrets.token_bytes(32)  # 256-bit key
+
+            # Encrypt the file with AES
+            with open(input_file_path, 'rb') as f:
+                plaintext = f.read()
+
+            # Padding for AES encryption
+            padder = sym_padding.PKCS7(algorithms.AES.block_size).padder()
+            padded_data = padder.update(plaintext) + padder.finalize()
+
+            iv = secrets.token_bytes(16)  # 128-bit IV for AES
+            cipher = Cipher(algorithms.AES(aes_key), modes.CBC(iv))
+            encryptor = cipher.encryptor()
+            ciphertext = encryptor.update(padded_data) + encryptor.finalize()
+
+            # Write the encrypted file
+            with open(output_file_path, 'wb') as f:
+                f.write(iv + ciphertext)
+
+            # Encrypt the AES key with the recipient's public RSA key
+            with open(public_key_path, 'rb') as key_file:
+                public_key = serialization.load_pem_public_key(key_file.read())
+
+            encrypted_aes_key = public_key.encrypt(
+                aes_key,
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+
+            # Write the encrypted AES key to a file
+            with open(aes_key_file_path, 'wb') as f:
+                f.write(encrypted_aes_key)
+
+            print(f"File encrypted successfully and saved to {output_file_path}")
+        except Exception as e:
+            print(f"Encryption failed: {str(e)}")
+            raise
+
+    def upload_to_ipfs(self, file_path):
+        result = subprocess.run(['ipfs', 'add', file_path], capture_output=True, text=True)
+        cid = result.stdout.split()[1]
+        return cid
+
+    def create_json_file(self, cid, sender_nickname, share_type):
+        data = {
+            "Root CID": cid,
+            "Sender": sender_nickname,
+            "Share Type": share_type,
+            "Signature": self.create_signature(cid + sender_nickname + str(share_type))
+        }
+        json_file_path = f"/tmp/{cid}.json"
+        with open(json_file_path, 'w') as json_file:
+            json.dump(data, json_file, indent=4)
+        return json_file_path
+
+    def create_signature(self, data):
+        private_key_path = '/home/mete/PycharmProjects/pythonProject/mete_private_key.pem'
+        password = 'mete'
+        with open(private_key_path, 'rb') as key_file:
+            encrypted_private_key = key_file.read()
+        private_key = serialization.load_pem_private_key(encrypted_private_key, password=password.encode())
+        signature = private_key.sign(
+            data.encode(),
+            padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+            hashes.SHA256()
+        )
+        return signature.hex()
 
     def on_get_file_button_clicked(self):
         print("Get File button clicked")
@@ -482,6 +550,13 @@ class DashboardWindow(QMainWindow):
         self.register_window = RegisterWindow()
         self.register_window.show()
         self.hide()
+
+    def populateNodes(self):
+        self.addNode("Node1", True)
+        self.addNode("Node2", False)
+        self.addNode("Node3", True)
+        self.addNode("Node4", True)
+        self.addNode("Node5", False)
 
 
 class RegisterWindow(QWidget):
@@ -595,10 +670,8 @@ class RegisterWindow(QWidget):
 
         print(f"Asymmetric key pair generated for {nickname}")
 
-
 class LoginWindow(QWidget):
     def __init__(self):
-
         super().__init__()
         self.setWindowTitle('Login')
         self.resize(1000, 600)
@@ -717,7 +790,6 @@ class LoginWindow(QWidget):
         self.register_window.show()
         self.hide()
 
-
 def main():
     app = QApplication(sys.argv)
 
@@ -735,6 +807,11 @@ def main():
         start_main_app()
 
     ipfs_initializer.finished.connect(on_ipfs_init_finished)
+
+    def cleanup():
+        ipfs_initializer.stop_ipfs_daemon()
+
+    app.aboutToQuit.connect(cleanup)
 
     sys.exit(app.exec_())
 
