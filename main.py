@@ -2,6 +2,27 @@ import sys
 import os
 import subprocess
 from getpass import getpass
+
+def install_package(package_name):
+    try:
+        subprocess.run(['dpkg', '-s', package_name], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"{package_name} is already installed.")
+    except subprocess.CalledProcessError:
+        print(f"{package_name} is not installed. Installing...")
+        try:
+            subprocess.run(['sudo', 'apt-get', 'install', '-y', package_name], check=True)
+            print(f"{package_name} installed successfully.")
+        except subprocess.CalledProcessError:
+            print(f"Failed to install {package_name}. Please install it manually.")
+            sys.exit(1)
+
+# Ensure the required package is installed
+install_package('libxcb-xinerama0')
+
+# Unset environment variables to avoid conflicts
+os.environ.pop('QT_QPA_PLATFORM_PLUGIN_PATH', None)
+os.environ.pop('QT_PLUGIN_PATH', None)
+
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QPushButton, QApplication, QLabel,
                              QDesktopWidget, QHBoxLayout, QListWidgetItem, QSplitter, QListWidget, QFileDialog,
                              QLineEdit, QProgressBar)
