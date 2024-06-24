@@ -8,7 +8,7 @@ from hashlib import sha256
 from getpass import getpass
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QPushButton, QApplication, QLabel,
                              QDesktopWidget, QHBoxLayout, QListWidgetItem, QSplitter, QListWidget, QFileDialog,
-                             QLineEdit, QProgressBar)
+                             QLineEdit, QProgressBar, QDialog)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
 from PyQt5.QtGui import QPixmap, QPalette, QBrush, QIcon
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -303,6 +303,29 @@ class FileDropArea(QLabel):
             self.file_path = fname
             self.emit_file_dropped(fname)
 
+
+class PasswordDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Enter Password")
+        self.setFixedSize(300, 100)
+        layout = QVBoxLayout()
+
+        self.password_input = QLineEdit(self)
+        self.password_input.setEchoMode(QLineEdit.Password)
+        layout.addWidget(QLabel("Password:"))
+        layout.addWidget(self.password_input)
+
+        self.ok_button = QPushButton("OK", self)
+        self.ok_button.clicked.connect(self.accept)
+        layout.addWidget(self.ok_button)
+
+        self.setLayout(layout)
+
+    def get_password(self):
+        return self.password_input.text()
+
+
 class DashboardWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -545,7 +568,111 @@ class DashboardWindow(QMainWindow):
         return signature.hex()
 
     def on_get_file_button_clicked(self):
-        print("Get File button clicked")
+        json_file_path = self.smallFileDropArea.file_path
+        if json_file_path and json_file_path.endswith('.json'):
+            with open(json_file_path, 'r') as json_file:
+                data = json.load(json_file)
+
+            # Validate the signature
+            sender_nickname = data["Sender"]
+            signature = bytes.fromhex(data["Signature"])
+            string_to_sign = data["Root CID"] + data["Sender"] + data["Encrypted AES Key"]
+            if self.validate_signature(sender_nickname, string_to_sign, signature):
+                # Ask for user password to decrypt their private key
+                password_dialog = PasswordDialog(self)
+                if password_dialog.exec_() == QDialog.Accepted:
+                    password = password_dialog.get_password()
+                    receiver_name = json_file_path.split('/')[-1].split('_')[0]
+                    private_key_path = f'{receiver_name}_private_key.pem'
+                    encrypted_file_path = '/tmp/encrypted_file.enc'
+                    output_file_path = os.path.join(os.path.dirname(json_file_path), f'{receiver_name}_decrypted_file')
+
+                    # Download the encrypted file from IPFS
+                    cid = data["Root CID"]
+                    self.download_from_ipfs(cid, encrypted_file_path)
+
+                    # Decrypt the file
+                    encrypted_aes_key_b64 = data["Encrypted AES Key"]
+                    self.decrypt_file(private_key_path, encrypted_file_path, output_file_path, encrypted_aes_key_b64,
+                                      password)
+
+                    # Delete the encrypted file
+                    os.remove(encrypted_file_path)
+
+                    print(f"Decryption complete. Decrypted file saved to {output_file_path}")
+            else:
+                print("Invalid signature. Aborting file download.")
+        else:
+            print("No valid JSON file selected.")
+
+    def validate_signature(self, sender_nickname, data, signature):
+        user_details = self.get_user_details(sender_nickname)
+        if user_details:
+            public_key_path = user_details[-1]
+            with open(public_key_path, 'rb') as key_file:
+                public_key = serialization.load_pem_public_key(key_file.read())
+
+            try:
+                public_key.verify(
+                    signature,
+                    data.encode(),
+                    padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+                    hashes.SHA256()
+                )
+                return True
+            except Exception as e:
+                print(f"Signature validation failed: {str(e)}")
+                return False
+        return False
+
+    def download_from_ipfs(self, cid, output_file_path):
+        result = subprocess.run(['ipfs', 'get', cid, '-o', output_file_path], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise Exception(f"Failed to download file from IPFS: {result.stderr}")
+        print(f"File downloaded from IPFS: {output_file_path}")
+
+    def decrypt_file(self, private_key_path, encrypted_file_path, output_file_path, encrypted_aes_key_b64, password):
+        try:
+            # Load the recipient's private key
+            with open(private_key_path, 'rb') as key_file:
+                private_key = serialization.load_pem_private_key(key_file.read(), password=password.encode())
+
+            # Decode the base64 encoded AES key
+            encrypted_aes_key = base64.b64decode(encrypted_aes_key_b64)
+
+            # Decrypt the AES key using the recipient's private RSA key
+            aes_key = private_key.decrypt(
+                encrypted_aes_key,
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+
+            # Read the encrypted file content
+            with open(encrypted_file_path, 'rb') as f:
+                iv = f.read(16)  # The first 16 bytes are the IV
+                ciphertext = f.read()
+
+            # Decrypt the file content using the AES key
+            cipher = Cipher(algorithms.AES(aes_key), modes.CBC(iv))
+            decryptor = cipher.decryptor()
+            padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+
+            # Remove padding
+            unpadder = sym_padding.PKCS7(algorithms.AES.block_size).unpadder()
+            plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()
+
+            # Write the decrypted content to the output file
+            with open(output_file_path, 'wb') as f:
+                f.write(plaintext)
+
+            print(f"File decrypted successfully and saved to {output_file_path}")
+
+        except Exception as e:
+            print(f"Decryption failed: {str(e)}")
+            raise
 
     def on_register_button_clicked(self):
         self.register_window = RegisterWindow()
