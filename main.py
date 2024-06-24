@@ -1,7 +1,8 @@
-import sys
 import os
 import subprocess
 import json
+import sys
+
 import pyodbc
 from hashlib import sha256
 from getpass import getpass
@@ -15,10 +16,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives.kdf.concatkdf import ConcatKDFHash
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding as sym_padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import platform
 import time
 import base64
@@ -449,10 +448,10 @@ class DashboardWindow(QMainWindow):
                 file_path = self.fileDropArea.file_path
                 if file_path:
                     encrypted_file_path = file_path + ".enc"
-                    aes_key_file_path = encrypted_file_path + ".key"
-                    self.encrypt_file(public_key_path, file_path, encrypted_file_path, aes_key_file_path)
+                    encrypted_aes_key = self.encrypt_file(public_key_path, file_path, encrypted_file_path)
                     cid = self.upload_to_ipfs(encrypted_file_path)
-                    json_file_path = self.create_json_file(cid, "mete", 0)
+                    json_file_path = self.create_json_file(cid, "mete", encrypted_aes_key, node_name,
+                                                           os.path.basename(file_path))
                     print(f"JSON file created at: {json_file_path}")
                 else:
                     print("No file selected")
@@ -469,7 +468,7 @@ class DashboardWindow(QMainWindow):
         conn.close()
         return row
 
-    def encrypt_file(self, public_key_path, input_file_path, output_file_path, aes_key_file_path):
+    def encrypt_file(self, public_key_path, input_file_path, output_file_path):
         try:
             # Generate a random AES key
             aes_key = secrets.token_bytes(32)  # 256-bit key
@@ -504,11 +503,8 @@ class DashboardWindow(QMainWindow):
                 )
             )
 
-            # Write the encrypted AES key to a file
-            with open(aes_key_file_path, 'wb') as f:
-                f.write(encrypted_aes_key)
-
             print(f"File encrypted successfully and saved to {output_file_path}")
+            return encrypted_aes_key
         except Exception as e:
             print(f"Encryption failed: {str(e)}")
             raise
@@ -518,14 +514,19 @@ class DashboardWindow(QMainWindow):
         cid = result.stdout.split()[1]
         return cid
 
-    def create_json_file(self, cid, sender_nickname, share_type):
+    def create_json_file(self, cid, sender_nickname, encrypted_aes_key, receiver_name, original_file_name):
+        encrypted_aes_key_b64 = base64.b64encode(encrypted_aes_key).decode('utf-8')
         data = {
             "Root CID": cid,
             "Sender": sender_nickname,
-            "Share Type": share_type,
-            "Signature": self.create_signature(cid + sender_nickname + str(share_type))
+            "Encrypted AES Key": encrypted_aes_key_b64
         }
-        json_file_path = f"/tmp/{cid}.json"
+        # Create a string to sign that includes the encrypted AES key
+        string_to_sign = cid + sender_nickname + encrypted_aes_key_b64
+        data["Signature"] = self.create_signature(string_to_sign)
+
+        json_file_name = f"{receiver_name}_{original_file_name}.json"
+        json_file_path = os.path.join("/tmp", json_file_name)
         with open(json_file_path, 'w') as json_file:
             json.dump(data, json_file, indent=4)
         return json_file_path
