@@ -1,4 +1,5 @@
 import os
+import random
 import subprocess
 import json
 import sys
@@ -457,9 +458,6 @@ class DashboardWindow(QMainWindow):
         centerPoint = QDesktopWidget().availableGeometry().center()
         self.move(centerPoint.x() - self.width() // 2, centerPoint.y() - self.height() // 2)
 
-    def addNode(self, name, is_online):
-        node_item = NodeItem(name, is_online)
-        self.nodeList.addItem(node_item)
 
     def on_send_button_clicked(self):
         selected_item = self.nodeList.currentItem()
@@ -468,11 +466,11 @@ class DashboardWindow(QMainWindow):
             # Get node details from database
             user_details = self.get_user_details(node_name)
             if user_details:
-                public_key_path = user_details[-1]
+                public_key_str = user_details[-1]
                 file_path = self.fileDropArea.file_path
                 if file_path:
                     encrypted_file_path = file_path + ".enc"
-                    encrypted_aes_key = self.encrypt_file(public_key_path, file_path, encrypted_file_path)
+                    encrypted_aes_key = self.encrypt_file(public_key_str, file_path, encrypted_file_path)
                     cid = self.upload_to_ipfs(encrypted_file_path)
                     json_file_path = self.create_json_file(cid, "mete", encrypted_aes_key, node_name,
                                                            os.path.basename(file_path))
@@ -485,14 +483,14 @@ class DashboardWindow(QMainWindow):
             print("No node selected")
 
     def get_user_details(self, nickname):
-        conn = pyodbc.connect('DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
+        conn = pyodbc.connect('DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.1.101,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM [User] WHERE nickname = ?", nickname)
         row = cursor.fetchone()
         conn.close()
         return row
 
-    def encrypt_file(self, public_key_path, input_file_path, output_file_path):
+    def encrypt_file(self, public_key_str, input_file_path, output_file_path):
         try:
             # Generate a random AES key
             aes_key = secrets.token_bytes(32)  # 256-bit key
@@ -514,10 +512,10 @@ class DashboardWindow(QMainWindow):
             with open(output_file_path, 'wb') as f:
                 f.write(iv + ciphertext)
 
-            # Encrypt the AES key with the recipient's public RSA key
-            with open(public_key_path, 'rb') as key_file:
-                public_key = serialization.load_pem_public_key(key_file.read())
+            # Convert the public key string to a public key object
+            public_key = serialization.load_pem_public_key(public_key_str.encode('utf-8'))
 
+            # Encrypt the AES key with the recipient's public RSA key
             encrypted_aes_key = public_key.encrypt(
                 aes_key,
                 padding.OAEP(
@@ -578,6 +576,7 @@ class DashboardWindow(QMainWindow):
             sender_nickname = data["Sender"]
             signature = bytes.fromhex(data["Signature"])
             string_to_sign = data["Root CID"] + data["Sender"] + data["Encrypted AES Key"]
+
             if self.validate_signature(sender_nickname, string_to_sign, signature):
                 # Ask for user password to decrypt their private key
                 password_dialog = PasswordDialog(self)
@@ -609,9 +608,8 @@ class DashboardWindow(QMainWindow):
     def validate_signature(self, sender_nickname, data, signature):
         user_details = self.get_user_details(sender_nickname)
         if user_details:
-            public_key_path = user_details[-1]
-            with open(public_key_path, 'rb') as key_file:
-                public_key = serialization.load_pem_public_key(key_file.read())
+            public_key_str = user_details[-1]
+            public_key = serialization.load_pem_public_key(public_key_str.encode('utf-8'))
 
             try:
                 public_key.verify(
@@ -681,11 +679,20 @@ class DashboardWindow(QMainWindow):
         self.hide()
 
     def populateNodes(self):
-        self.addNode("Node1", True)
-        self.addNode("Node2", False)
-        self.addNode("Node3", True)
-        self.addNode("Node4", True)
-        self.addNode("Node5", False)
+        conn = pyodbc.connect('DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.1.101,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
+        cursor = conn.cursor()
+        cursor.execute("SELECT nickname FROM [User]")
+        rows = cursor.fetchall()
+        conn.close()
+
+        for row in rows:
+            nickname = row[0]
+            is_online = random.choice([True, False])  # Randomly assign online status
+            self.addNode(nickname, is_online)
+
+    def addNode(self, name, is_online):
+        node_item = NodeItem(name, is_online)
+        self.nodeList.addItem(node_item)
 
 
 class RegisterWindow(QWidget):
@@ -787,7 +794,8 @@ class RegisterWindow(QWidget):
             self.dashboard.show()
             self.hide()
         else:
-            print("Registration failed")
+            error_message = response.json().get('error', 'Unknown error')
+            print(f"Registration failed: {error_message}")
 
     def generate_asymmetric_key_pair(self, nickname, email, password):
         private_key = rsa.generate_private_key(
