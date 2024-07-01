@@ -329,24 +329,49 @@ class PasswordDialog(QDialog):
 
 
 class DashboardWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, session_token=None, nonce=None, private_key=None):
         super().__init__()
         self.setWindowTitle('Dashboard')
         self.setFixedSize(1500, 900)
         self.centerWindow()
         self.all_nodes = []  # Store all nodes
-        self.heartbeat_thread = HeartbeatThread(
-            "http://192.168.1.101:5000/heartbeat")  # Replace with your actual server URL
-        self.heartbeat_thread.start()
+        self.session_token = session_token
+        self.nonce = nonce
+        self.private_key = private_key
+
+        if self.session_token and self.nonce:
+            self.heartbeat_thread = HeartbeatThread(
+                "http://192.168.1.101:5000/heartbeat",
+                self.session_token,
+                self.nonce,
+                self.private_key,
+                self.get_username()
+            )
+            self.heartbeat_thread.start()
+        else:
+            self.heartbeat_thread = None
+            print("Skipping heartbeat as server authentication is not available")
 
         self.local_db_path = 'local_database.json'
 
         self.initUI()
 
+        # Start a thread to periodically check the online status of nodes
+        self.update_status_thread = NodeStatusUpdateThread(self)
+        self.update_status_thread.start()
+
     def closeEvent(self, event):
-        self.heartbeat_thread.stop()
-        self.heartbeat_thread.wait()
+        if self.heartbeat_thread:
+            self.heartbeat_thread.stop()
+            self.heartbeat_thread.wait()
+        self.update_status_thread.stop()
+        self.update_status_thread.wait()
         event.accept()
+
+    def get_username(self):
+        with open('user_config.json', 'r') as config_file:
+            user_config = json.load(config_file)
+        return user_config['nickname']
 
     def on_database_checkbox_changed(self, state):
         if state == Qt.Checked:
@@ -739,7 +764,7 @@ class DashboardWindow(QMainWindow):
 
     def is_server_online(self):
         try:
-            response = requests.get("http://192.168.1.101:5000/heartbeat")
+            response = requests.get("http://192.168.1.101:5000/online_users")
             return response.status_code == 200
         except requests.RequestException:
             return False
@@ -768,7 +793,7 @@ class DashboardWindow(QMainWindow):
 
                 for row in rows:
                     nickname = row[0]
-                    is_online = random.choice([True, False])  # Randomly assign online status
+                    is_online = False  # Everybody seems offline if the server is down.
                     self.addNode(nickname, is_online)
                     self.all_nodes.append((nickname, is_online))  # Store all nodes
             else:
@@ -789,12 +814,41 @@ class DashboardWindow(QMainWindow):
         node_item = NodeItem(name, is_online)
         self.nodeList.addItem(node_item)
 
+    def update_node_status(self):
+        try:
+            response = requests.get('http://192.168.1.101:5000/online_users')
+            if response.status_code == 200:
+                online_users = response.json()
+                for i in range(self.nodeList.count()):
+                    item = self.nodeList.item(i)
+                    item.setIcon(QIcon(
+                        '/home/mete/Downloads/green.png' if item.text() in online_users else '/home/mete/Downloads/red.png'))
+            else:
+                print("Failed to get online users")
+        except requests.RequestException as e:
+            print(f"Error getting online users: {e}")
+
 
     def filter_nodes(self, text):
         self.nodeList.clear()  # Clear the current list
         for name, is_online in self.all_nodes:
             if text.lower() in name.lower():
                 self.addNode(name, is_online)
+
+class NodeStatusUpdateThread(QThread):
+    def __init__(self, dashboard_window, interval=10):
+        super().__init__()
+        self.dashboard_window = dashboard_window
+        self.interval = interval
+        self.running = True
+
+    def run(self):
+        while self.running:
+            self.dashboard_window.update_node_status()
+            time.sleep(self.interval)
+
+    def stop(self):
+        self.running = False
 
 class DatabaseUpdateThread(QThread):
     def __init__(self, local_db_path, interval=60):
@@ -962,6 +1016,9 @@ class LoginWindow(QWidget):
         self.setWindowTitle('Login')
         self.resize(1000, 600)
         self.centerWindow()
+        self.session_token = None
+        self.nonce = None
+        self.private_key = None
         self.initUI()
 
     def initUI(self):
@@ -1072,14 +1129,51 @@ class LoginWindow(QWidget):
         try:
             # Load the recipient's private key
             with open(private_key_path, 'rb') as key_file:
-                private_key = serialization.load_pem_private_key(key_file.read(), password=password.encode())
+                self.private_key = serialization.load_pem_private_key(key_file.read(), password=password.encode())
 
-            print("Login successful")
-            self.dashboard = DashboardWindow()
-            self.dashboard.show()
-            self.hide()
+            # Try to authenticate with the server
+            if self.is_server_online():
+                print("Attempting server authentication...")
+                # Create the initial authentication data
+                timestamp = str(int(time.time()))
+                nonce = secrets.token_hex(16)
+                data_to_sign = nickname + timestamp + nonce
+                signature = self.private_key.sign(
+                    data_to_sign.encode(),
+                    padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+                    hashes.SHA256()
+                )
+                auth_data = {
+                    'username': nickname,
+                    'timestamp': timestamp,
+                    'nonce': nonce,
+                    'signature': signature.hex()
+                }
+                response = requests.post('http://192.168.1.101:5000/authenticate', json=auth_data)
+                if response.status_code == 200:
+                    self.session_token = response.json()['session_token']
+                    self.nonce = response.json()['nonce']
+                    print("Login successful (server authenticated)")
+                    self.dashboard = DashboardWindow(session_token=self.session_token, nonce=self.nonce,
+                                                     private_key=self.private_key)
+                    self.dashboard.show()
+                    self.hide()
+                else:
+                    print("Authentication failed")
+            else:
+                print("Server is offline, falling back to local authentication")
+                self.dashboard = DashboardWindow(private_key=self.private_key)
+                self.dashboard.show()
+                self.hide()
         except Exception as e:
             print(f"Login failed: {str(e)}")
+
+    def is_server_online(self):
+        try:
+            response = requests.get("http://192.168.1.101:5000/online_users")
+            return response.status_code == 200
+        except requests.RequestException:
+            return False
 
     def centerWindow(self):
         qr = self.frameGeometry()
@@ -1093,9 +1187,13 @@ class LoginWindow(QWidget):
         self.hide()
 
 class HeartbeatThread(QThread):
-    def __init__(self, server_url, interval=10):
+    def __init__(self, server_url, session_token, nonce, private_key, username, interval=10):
         super().__init__()
         self.server_url = server_url
+        self.session_token = session_token
+        self.nonce = nonce
+        self.private_key = private_key
+        self.username = username
         self.interval = interval
         self.running = True
 
@@ -1106,16 +1204,25 @@ class HeartbeatThread(QThread):
 
     def send_heartbeat(self):
         try:
-            response = requests.get(self.server_url)
+            signed_nonce = self.private_key.sign(
+                self.nonce.encode(),
+                padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+                hashes.SHA256()
+            ).hex()
+            heartbeat_data = {
+                'username': self.username,
+                'session_token': self.session_token,
+                'signed_nonce': signed_nonce
+            }
+            response = requests.post(self.server_url, json=heartbeat_data)
             if response.status_code == 200:
-                print("Server is online")
-                # Update the online status of nodes here if needed
+                new_nonce = response.json().get('nonce')
+                self.nonce = new_nonce
+                print("Heartbeat successful")
             else:
-                print("Server is offline")
-                # Handle the server offline scenario
-        except requests.RequestException:
-            print("Server is offline")
-            # Handle the server offline scenario
+                print(f"Heartbeat failed with status code: {response.status_code}")
+        except requests.RequestException as e:
+            print(f"Heartbeat error: {e}")
 
     def stop(self):
         self.running = False
