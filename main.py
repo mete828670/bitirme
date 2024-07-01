@@ -22,6 +22,7 @@ import platform
 import time
 import base64
 import secrets
+import requests
 
 def install_package(package_name):
     try:
@@ -764,11 +765,29 @@ class RegisterWindow(QWidget):
         nickname = self.nicknameInput.text()
         email = self.emailInput.text()
         password = self.passwordInput.text()
-        self.generate_asymmetric_key_pair(nickname, email, password)
-        print(f"Registered with nickname: {nickname}, email: {email}")
-        self.dashboard = DashboardWindow()
-        self.dashboard.show()
-        self.hide()
+
+        private_key, public_key = self.generate_asymmetric_key_pair(nickname, email, password)
+
+        public_key_pem = public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        ).decode('utf-8')
+
+        data = {
+            'nickname': nickname,
+            'email': email,
+            'password': password,
+            'public_key': public_key_pem
+        }
+
+        response = requests.post('http://192.168.1.101:5000/register', json=data)
+        if response.status_code == 200:
+            print(f"Registered with nickname: {nickname}, email: {email}")
+            self.dashboard = DashboardWindow()
+            self.dashboard.show()
+            self.hide()
+        else:
+            print("Registration failed")
 
     def generate_asymmetric_key_pair(self, nickname, email, password):
         private_key = rsa.generate_private_key(
@@ -788,15 +807,14 @@ class RegisterWindow(QWidget):
         with open(f"{nickname}_private_key.pem", 'wb') as f:
             f.write(private_key_pem)
 
-        public_key_pem = public_key.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        )
-
         with open(f"{nickname}_public_key.pem", 'wb') as f:
-            f.write(public_key_pem)
+            f.write(public_key.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            ))
 
         print(f"Asymmetric key pair generated for {nickname}")
+        return private_key, public_key
 
 class LoginWindow(QWidget):
     def __init__(self):
