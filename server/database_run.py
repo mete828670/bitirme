@@ -3,8 +3,10 @@ from flask_restful import Api, Resource
 import pyodbc
 import bcrypt
 import traceback  # For detailed error logging
+from flask_cors import CORS  # Import CORS
 
 app = Flask(__name__)
+CORS(app)  # Enable CORS
 api = Api(app)
 
 # Replace with your actual SQL Server UID and PWD
@@ -55,6 +57,31 @@ class Register(Resource):
             return make_response(jsonify({'error': str(e)}), 500)
 
 api.add_resource(Register, '/register')
+
+@app.route('/heartbeat', methods=['GET'])
+def heartbeat():
+    return "OK", 200
+
+@app.route('/database', methods=['GET'])
+def get_database():
+    try:
+        conn = pyodbc.connect(f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={SERVER};DATABASE=FileSharingDB;UID={UID};PWD={PWD};TrustServerCertificate=yes')
+        cursor = conn.cursor()
+        cursor.execute("SELECT nickname, email, PublicKey FROM [User]")
+        rows = cursor.fetchall()
+        conn.close()
+
+        data = []
+        for row in rows:
+            data.append({
+                'nickname': row[0],
+                'email': row[1],
+                'public_key': row[2]
+            })
+
+        return jsonify(data)
+    except Exception as e:
+        return str(e), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
