@@ -801,13 +801,16 @@ class RegisterWindow(QWidget):
 
         response = requests.post('http://192.168.1.101:5000/register', json=data)
         if response.status_code == 200:
+            # Store the username locally
+            with open('user_config.json', 'w') as config_file:
+                json.dump({'nickname': nickname}, config_file)
+
             print(f"Registered with nickname: {nickname}, email: {email}")
             self.dashboard = DashboardWindow()
             self.dashboard.show()
             self.hide()
         else:
-            error_message = response.json().get('error', 'Unknown error')
-            print(f"Registration failed: {error_message}")
+            print("Registration failed")
 
     def generate_asymmetric_key_pair(self, nickname, email, password):
         private_key = rsa.generate_private_key(
@@ -940,10 +943,26 @@ class LoginWindow(QWidget):
         self.setLayout(mainLayout)
 
     def on_login_button_clicked(self):
-        print("Login button clicked")
-        self.hide()
-        self.dashboard = DashboardWindow()
-        self.dashboard.show()
+        password = self.passwordInput.text()
+
+        # Read the stored username
+        with open('user_config.json', 'r') as config_file:
+            user_config = json.load(config_file)
+
+        nickname = user_config['nickname']
+        private_key_path = f'{nickname}_private_key.pem'
+
+        try:
+            # Load the recipient's private key
+            with open(private_key_path, 'rb') as key_file:
+                private_key = serialization.load_pem_private_key(key_file.read(), password=password.encode())
+
+            print("Login successful")
+            self.dashboard = DashboardWindow()
+            self.dashboard.show()
+            self.hide()
+        except Exception as e:
+            print(f"Login failed: {str(e)}")
 
     def centerWindow(self):
         qr = self.frameGeometry()
