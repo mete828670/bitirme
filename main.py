@@ -334,7 +334,10 @@ class DashboardWindow(QMainWindow):
         self.setWindowTitle('Dashboard')
         self.setFixedSize(1500, 900)
         self.centerWindow()
+        self.all_nodes = []  # Store all nodes
+
         self.initUI()
+
 
     def initUI(self):
         pixmap = QPixmap('/home/mete/Downloads/fileuploadback.jpg')
@@ -365,6 +368,7 @@ class DashboardWindow(QMainWindow):
                        color: #003366;
                    }
                """)
+        self.searchBar.textChanged.connect(self.filter_nodes)  # Connect search bar
 
         self.nodeList = QListWidget(self)
         nodeListWidth = self.width() - drop_area_width - 20
@@ -679,7 +683,8 @@ class DashboardWindow(QMainWindow):
         self.hide()
 
     def populateNodes(self):
-        conn = pyodbc.connect('DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.1.101,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
+        conn = pyodbc.connect(
+            'DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.1.101,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
         cursor = conn.cursor()
         cursor.execute("SELECT nickname FROM [User]")
         rows = cursor.fetchall()
@@ -689,10 +694,17 @@ class DashboardWindow(QMainWindow):
             nickname = row[0]
             is_online = random.choice([True, False])  # Randomly assign online status
             self.addNode(nickname, is_online)
+            self.all_nodes.append((nickname, is_online))  # Store all nodes
 
     def addNode(self, name, is_online):
         node_item = NodeItem(name, is_online)
         self.nodeList.addItem(node_item)
+
+    def filter_nodes(self, text):
+        self.nodeList.clear()  # Clear the current list
+        for name, is_online in self.all_nodes:
+            if text.lower() in name.lower():
+                self.addNode(name, is_online)
 
 
 class RegisterWindow(QWidget):
