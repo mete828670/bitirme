@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify, make_response
 from flask_restful import Api, Resource
 import pyodbc
 import bcrypt
-import traceback  # Add this import for detailed error logging
+import traceback  # For detailed error logging
 
 app = Flask(__name__)
 api = Api(app)
@@ -10,7 +10,7 @@ api = Api(app)
 # Replace with your actual SQL Server UID and PWD
 UID = 'sa'  # or your SQL Server user
 PWD = 'MeTe14531915.'  # replace with your actual password
-SERVER = '192.168.1.101,1435'  # Use the IP address of your SQL Server with the specified port
+SERVER = '192.168.1.101,1435'  # Use the IP address and port of your SQL Server
 
 class Register(Resource):
     def post(self):
@@ -21,15 +21,25 @@ class Register(Resource):
             password = data['password']
             public_key = data['public_key']
 
-            # Hash the password
-            hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-
             # Connect to the database
             conn = pyodbc.connect(f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={SERVER};DATABASE=FileSharingDB;UID={UID};PWD={PWD};TrustServerCertificate=yes')
             cursor = conn.cursor()
 
+            # Check if the username or email already exists
+            cursor.execute("SELECT COUNT(*) FROM [User] WHERE nickname = ?", nickname)
+            if cursor.fetchone()[0] > 0:
+                return make_response(jsonify({'error': 'Username already exists'}), 400)
+
+            cursor.execute("SELECT COUNT(*) FROM [User] WHERE email = ?", email)
+            if cursor.fetchone()[0] > 0:
+                return make_response(jsonify({'error': 'Email already exists'}), 400)
+
+            # Hash the password
+            hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+
             # Insert the new user into the database
-            cursor.execute("INSERT INTO [User] (nickname, password, email, PublicKey) VALUES (?, ?, ?, ?)", (nickname, hashed_password.decode('utf-8'), email, public_key))
+            cursor.execute("INSERT INTO [User] (nickname, password, email, PublicKey) VALUES (?, ?, ?, ?)", 
+                           (nickname, hashed_password.decode('utf-8'), email, public_key))
             conn.commit()
             cursor.close()
             conn.close()
