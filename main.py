@@ -556,7 +556,8 @@ class DashboardWindow(QMainWindow):
                     encrypted_file_path = file_path + ".enc"
                     encrypted_aes_key = self.encrypt_file(public_key_str, file_path, encrypted_file_path)
                     cid = self.upload_to_ipfs(encrypted_file_path)
-                    json_file_path = self.create_json_file(cid, "mete", encrypted_aes_key, node_name,
+                    username = self.get_username()
+                    json_file_path = self.create_json_file(cid, username, encrypted_aes_key, node_name,
                                                            os.path.basename(file_path))
                     print(f"JSON file created at: {json_file_path}")
                 else:
@@ -658,8 +659,9 @@ class DashboardWindow(QMainWindow):
         return json_file_path
 
     def create_signature(self, data):
-        private_key_path = '/home/mete/PycharmProjects/pythonProject/mete_private_key.pem'
-        password = 'mete'
+        username = self.get_username()
+        private_key_path = f'{username}_private_key.pem'
+        password = 'mete4'
         with open(private_key_path, 'rb') as key_file:
             encrypted_private_key = key_file.read()
         private_key = serialization.load_pem_private_key(encrypted_private_key, password=password.encode())
