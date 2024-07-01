@@ -9,7 +9,7 @@ from hashlib import sha256
 from getpass import getpass
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QPushButton, QApplication, QLabel,
                              QDesktopWidget, QHBoxLayout, QListWidgetItem, QSplitter, QListWidget, QFileDialog,
-                             QLineEdit, QProgressBar, QDialog)
+                             QLineEdit, QProgressBar, QDialog, QCheckBox, QMessageBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
 from PyQt5.QtGui import QPixmap, QPalette, QBrush, QIcon
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -335,8 +335,39 @@ class DashboardWindow(QMainWindow):
         self.setFixedSize(1500, 900)
         self.centerWindow()
         self.all_nodes = []  # Store all nodes
+        self.heartbeat_thread = HeartbeatThread(
+            "http://192.168.1.101:5000/heartbeat")  # Replace with your actual server URL
+        self.heartbeat_thread.start()
+
+        self.local_db_path = 'local_database.json'
 
         self.initUI()
+
+    def closeEvent(self, event):
+        self.heartbeat_thread.stop()
+        self.heartbeat_thread.wait()
+        event.accept()
+
+    def on_database_checkbox_changed(self, state):
+        if state == Qt.Checked:
+            self.download_database()
+            self.database_thread = DatabaseUpdateThread(self.local_db_path)
+            self.database_thread.start()
+        else:
+            if hasattr(self, 'database_thread'):
+                self.database_thread.stop()
+
+    def download_database(self):
+        try:
+            response = requests.get('http://192.168.1.101:5000/database')
+            if response.status_code == 200:
+                with open(self.local_db_path, 'w') as f:
+                    f.write(response.text)
+                print("Database downloaded successfully")
+            else:
+                print("Failed to download database")
+        except requests.RequestException as e:
+            print(f"Error downloading database: {e}")
 
 
     def initUI(self):
@@ -348,6 +379,10 @@ class DashboardWindow(QMainWindow):
         self.centralWidget = QWidget(self)
         self.setCentralWidget(self.centralWidget)
         layout = QVBoxLayout(self.centralWidget)
+
+        self.databaseCheckbox = QCheckBox("Activate Database Download", self)
+        self.databaseCheckbox.stateChanged.connect(self.on_database_checkbox_changed)
+        layout.addWidget(self.databaseCheckbox)
 
         splitter = QSplitter(Qt.Horizontal)
 
@@ -487,12 +522,32 @@ class DashboardWindow(QMainWindow):
             print("No node selected")
 
     def get_user_details(self, nickname):
-        conn = pyodbc.connect('DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.1.101,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM [User] WHERE nickname = ?", nickname)
-        row = cursor.fetchone()
-        conn.close()
-        return row
+        try:
+            # Attempt to get user details from the server
+            conn = pyodbc.connect(
+                'DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.1.101,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM [User] WHERE nickname = ?", nickname)
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                return row
+        except pyodbc.OperationalError as e:
+            print(f"Server connection failed: {e}")
+
+        # Fallback to local database
+        return self.get_user_details_from_local(nickname)
+
+    def get_user_details_from_local(self, nickname):
+        try:
+            with open(self.local_db_path, 'r') as f:
+                data = json.load(f)
+            for entry in data:
+                if entry['nickname'] == nickname:
+                    return entry['nickname'], entry['email'], entry['public_key']
+        except Exception as e:
+            print(f"Error reading local database: {e}")
+        return None
 
     def encrypt_file(self, public_key_str, input_file_path, output_file_path):
         try:
@@ -682,29 +737,91 @@ class DashboardWindow(QMainWindow):
         self.register_window.show()
         self.hide()
 
-    def populateNodes(self):
-        conn = pyodbc.connect(
-            'DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.1.101,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
-        cursor = conn.cursor()
-        cursor.execute("SELECT nickname FROM [User]")
-        rows = cursor.fetchall()
-        conn.close()
+    def is_server_online(self):
+        try:
+            response = requests.get("http://192.168.1.101:5000/heartbeat")
+            return response.status_code == 200
+        except requests.RequestException:
+            return False
 
-        for row in rows:
-            nickname = row[0]
-            is_online = random.choice([True, False])  # Randomly assign online status
-            self.addNode(nickname, is_online)
-            self.all_nodes.append((nickname, is_online))  # Store all nodes
+    def load_local_database(self):
+        if os.path.exists(self.local_db_path):
+            with open(self.local_db_path, 'r') as f:
+                data = json.load(f)
+            for entry in data:
+                nickname = entry['nickname']
+                is_online = random.choice([True, False])  # Randomly assign online status
+                self.addNode(nickname, is_online)
+                self.all_nodes.append((nickname, is_online))  # Store all nodes
+        else:
+            print("No local database found")
+
+    def populateNodes(self):
+        try:
+            if self.is_server_online():
+                conn = pyodbc.connect(
+                    'DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.1.101,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
+                cursor = conn.cursor()
+                cursor.execute("SELECT nickname FROM [User]")
+                rows = cursor.fetchall()
+                conn.close()
+
+                for row in rows:
+                    nickname = row[0]
+                    is_online = random.choice([True, False])  # Randomly assign online status
+                    self.addNode(nickname, is_online)
+                    self.all_nodes.append((nickname, is_online))  # Store all nodes
+            else:
+                if os.path.exists(self.local_db_path):
+                    self.load_local_database()
+                    QMessageBox.warning(self, "Warning", "Using local database as server is not available.")
+                else:
+                    QMessageBox.warning(self, "Warning", "No local database found and server is not available.")
+        except Exception as e:
+            print(f"Error populating nodes: {e}")
+            if os.path.exists(self.local_db_path):
+                self.load_local_database()
+                QMessageBox.warning(self, "Warning", "Using local database due to an error.")
+            else:
+                QMessageBox.warning(self, "Warning", "No local database found and an error occurred.")
 
     def addNode(self, name, is_online):
         node_item = NodeItem(name, is_online)
         self.nodeList.addItem(node_item)
+
 
     def filter_nodes(self, text):
         self.nodeList.clear()  # Clear the current list
         for name, is_online in self.all_nodes:
             if text.lower() in name.lower():
                 self.addNode(name, is_online)
+
+class DatabaseUpdateThread(QThread):
+    def __init__(self, local_db_path, interval=60):
+        super().__init__()
+        self.local_db_path = local_db_path
+        self.interval = interval
+        self.running = True
+
+    def run(self):
+        while self.running:
+            self.update_database()
+            time.sleep(self.interval)
+
+    def update_database(self):
+        try:
+            response = requests.get('http://192.168.1.101:5000/database')
+            if response.status_code == 200:
+                with open(self.local_db_path, 'w') as f:
+                    f.write(response.text)
+                print("Local database updated successfully")
+            else:
+                print("Failed to update local database")
+        except requests.RequestException as e:
+            print(f"Error updating local database: {e}")
+
+    def stop(self):
+        self.running = False
 
 
 class RegisterWindow(QWidget):
@@ -974,6 +1091,35 @@ class LoginWindow(QWidget):
         self.register_window = RegisterWindow()
         self.register_window.show()
         self.hide()
+
+class HeartbeatThread(QThread):
+    def __init__(self, server_url, interval=10):
+        super().__init__()
+        self.server_url = server_url
+        self.interval = interval
+        self.running = True
+
+    def run(self):
+        while self.running:
+            self.send_heartbeat()
+            time.sleep(self.interval)
+
+    def send_heartbeat(self):
+        try:
+            response = requests.get(self.server_url)
+            if response.status_code == 200:
+                print("Server is online")
+                # Update the online status of nodes here if needed
+            else:
+                print("Server is offline")
+                # Handle the server offline scenario
+        except requests.RequestException:
+            print("Server is offline")
+            # Handle the server offline scenario
+
+    def stop(self):
+        self.running = False
+
 
 def main():
     app = QApplication(sys.argv)
