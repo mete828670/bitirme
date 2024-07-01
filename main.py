@@ -157,6 +157,26 @@ class IPFSInitializer(QThread):
                 self.progress_signal.emit(100)
                 return
 
+        # Initialize IPFS if not already initialized
+        try:
+            self.log_signal.emit("Checking if IPFS repository is initialized...")
+            result = subprocess.run([IPFS_PATH, 'repo', 'stat'], capture_output=True, text=True)
+            if result.returncode != 0:
+                self.log_signal.emit("Initializing IPFS repository...")
+                result = subprocess.run([IPFS_PATH, 'init'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    self.log_signal.emit("IPFS repository initialized successfully.")
+                else:
+                    self.log_signal.emit(f"IPFS repository initialization failed: {result.stderr}")
+                    self.progress_signal.emit(100)
+                    return
+            else:
+                self.log_signal.emit("IPFS repository already initialized.")
+        except subprocess.CalledProcessError as e:
+            self.log_signal.emit(f"Failed to check IPFS repository status: {e}")
+            self.progress_signal.emit(100)
+            return
+
         # Run migration tool if needed
         try:
             self.log_signal.emit("Running IPFS migration tool...")
