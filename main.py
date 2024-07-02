@@ -60,7 +60,7 @@ class SplashScreen(QWidget):
 
         # Set background image
         self.background_label = QLabel(self)
-        pixmap = QPixmap('/home/mete/Downloads/loading.png')  # Replace with your image file path
+        pixmap = QPixmap('/home/mete/Downloads/loading.png')
         self.background_label.setPixmap(pixmap)
         self.background_label.setScaledContents(True)
         self.background_label.setGeometry(0, 0, 600, 300)
@@ -659,13 +659,10 @@ class DashboardWindow(QMainWindow):
         return json_file_path
 
     def create_signature(self, data):
-        username = self.get_username()
-        private_key_path = f'{username}_private_key.pem'
-        password = 'mete4'
-        with open(private_key_path, 'rb') as key_file:
-            encrypted_private_key = key_file.read()
-        private_key = serialization.load_pem_private_key(encrypted_private_key, password=password.encode())
-        signature = private_key.sign(
+        if not self.private_key:
+            raise ValueError("Private key is not available")
+
+        signature = self.private_key.sign(
             data.encode(),
             padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
             hashes.SHA256()
@@ -684,28 +681,22 @@ class DashboardWindow(QMainWindow):
             string_to_sign = data["Root CID"] + data["Sender"] + data["Encrypted AES Key"]
 
             if self.validate_signature(sender_nickname, string_to_sign, signature):
-                # Ask for user password to decrypt their private key
-                password_dialog = PasswordDialog(self)
-                if password_dialog.exec_() == QDialog.Accepted:
-                    password = password_dialog.get_password()
-                    receiver_name = json_file_path.split('/')[-1].split('_')[0]
-                    private_key_path = f'{receiver_name}_private_key.pem'
-                    encrypted_file_path = '/tmp/encrypted_file.enc'
-                    output_file_path = os.path.join(os.path.dirname(json_file_path), f'{receiver_name}_decrypted_file')
+                receiver_name = json_file_path.split('/')[-1].split('_')[0]
+                encrypted_file_path = '/tmp/encrypted_file.enc'
+                output_file_path = os.path.join(os.path.dirname(json_file_path), f'{receiver_name}_decrypted_file')
 
-                    # Download the encrypted file from IPFS
-                    cid = data["Root CID"]
-                    self.download_from_ipfs(cid, encrypted_file_path)
+                # Download the encrypted file from IPFS
+                cid = data["Root CID"]
+                self.download_from_ipfs(cid, encrypted_file_path)
 
-                    # Decrypt the file
-                    encrypted_aes_key_b64 = data["Encrypted AES Key"]
-                    self.decrypt_file(private_key_path, encrypted_file_path, output_file_path, encrypted_aes_key_b64,
-                                      password)
+                # Decrypt the file
+                encrypted_aes_key_b64 = data["Encrypted AES Key"]
+                self.decrypt_file(encrypted_file_path, output_file_path, encrypted_aes_key_b64)
 
-                    # Delete the encrypted file
-                    os.remove(encrypted_file_path)
+                # Delete the encrypted file
+                os.remove(encrypted_file_path)
 
-                    print(f"Decryption complete. Decrypted file saved to {output_file_path}")
+                print(f"Decryption complete. Decrypted file saved to {output_file_path}")
             else:
                 print("Invalid signature. Aborting file download.")
         else:
@@ -736,17 +727,16 @@ class DashboardWindow(QMainWindow):
             raise Exception(f"Failed to download file from IPFS: {result.stderr}")
         print(f"File downloaded from IPFS: {output_file_path}")
 
-    def decrypt_file(self, private_key_path, encrypted_file_path, output_file_path, encrypted_aes_key_b64, password):
+    def decrypt_file(self, encrypted_file_path, output_file_path, encrypted_aes_key_b64):
         try:
-            # Load the recipient's private key
-            with open(private_key_path, 'rb') as key_file:
-                private_key = serialization.load_pem_private_key(key_file.read(), password=password.encode())
+            if not self.private_key:
+                raise ValueError("Private key is not available")
 
             # Decode the base64 encoded AES key
             encrypted_aes_key = base64.b64decode(encrypted_aes_key_b64)
 
             # Decrypt the AES key using the recipient's private RSA key
-            aes_key = private_key.decrypt(
+            aes_key = self.private_key.decrypt(
                 encrypted_aes_key,
                 padding.OAEP(
                     mgf=padding.MGF1(algorithm=hashes.SHA256()),
@@ -797,7 +787,7 @@ class DashboardWindow(QMainWindow):
                 data = json.load(f)
             for entry in data:
                 nickname = entry['nickname']
-                is_online = random.choice([True, False])  # Randomly assign online status
+                is_online = False #Everybody seems offline if the server is down.
                 self.addNode(nickname, is_online)
                 self.all_nodes.append((nickname, is_online))  # Store all nodes
         else:
@@ -815,7 +805,7 @@ class DashboardWindow(QMainWindow):
 
                 for row in rows:
                     nickname = row[0]
-                    is_online = False  # Everybody seems offline if the server is down.
+                    is_online = False
                     self.addNode(nickname, is_online)
                     self.all_nodes.append((nickname, is_online))  # Store all nodes
             else:
