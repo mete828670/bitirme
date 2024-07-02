@@ -361,7 +361,7 @@ class DashboardWindow(QMainWindow):
 
         if self.session_token and self.nonce:
             self.heartbeat_thread = HeartbeatThread(
-                "http://192.168.1.101:5000/heartbeat",
+                "http://192.168.181.90:5000/heartbeat",
                 self.session_token,
                 self.nonce,
                 self.private_key,
@@ -404,7 +404,7 @@ class DashboardWindow(QMainWindow):
 
     def download_database(self):
         try:
-            response = requests.get('http://192.168.1.101:5000/database')
+            response = requests.get('http://192.168.181.90:5000/database')
             if response.status_code == 200:
                 with open(self.local_db_path, 'w') as f:
                     f.write(response.text)
@@ -451,6 +451,7 @@ class DashboardWindow(QMainWindow):
         self.searchBar.textChanged.connect(self.filter_nodes)  # Connect search bar
 
         self.nodeList = QListWidget(self)
+        self.nodeList.setSelectionMode(QListWidget.MultiSelection)  # Allow multiple selections
         nodeListWidth = self.width() - drop_area_width - 20
         nodeListHeight = drop_area_height - self.searchBar.height() - 10
         self.nodeList.setFixedSize(nodeListWidth, nodeListHeight)
@@ -542,36 +543,48 @@ class DashboardWindow(QMainWindow):
         centerPoint = QDesktopWidget().availableGeometry().center()
         self.move(centerPoint.x() - self.width() // 2, centerPoint.y() - self.height() // 2)
 
-
     def on_send_button_clicked(self):
-        selected_item = self.nodeList.currentItem()
-        if selected_item:
-            node_name = selected_item.text()
-            # Get node details from database
+        selected_items = self.nodeList.selectedItems()
+        if not selected_items:
+            print("No nodes selected")
+            return
+
+        file_path = self.fileDropArea.file_path
+        if not file_path:
+            print("No file selected")
+            return
+
+        encrypted_file_path = file_path + ".enc"
+        encrypted_aes_keys = []
+
+        for item in selected_items:
+            node_name = item.text()
             user_details = self.get_user_details(node_name)
             if user_details:
                 public_key_str = user_details[-1]
-                file_path = self.fileDropArea.file_path
-                if file_path:
-                    encrypted_file_path = file_path + ".enc"
-                    encrypted_aes_key = self.encrypt_file(public_key_str, file_path, encrypted_file_path)
-                    cid = self.upload_to_ipfs(encrypted_file_path)
-                    username = self.get_username()
-                    json_file_path = self.create_json_file(cid, username, encrypted_aes_key, node_name,
-                                                           os.path.basename(file_path))
-                    print(f"JSON file created at: {json_file_path}")
-                else:
-                    print("No file selected")
+                print(f"Public Key for {node_name}: {public_key_str}")  # Debugging statement
+                encrypted_aes_key = self.encrypt_file(public_key_str, file_path, encrypted_file_path)
+                encrypted_aes_keys.append((node_name, encrypted_aes_key))
             else:
-                print("Node details not found")
-        else:
-            print("No node selected")
+                print(f"Node details not found for {node_name}")
+
+        if not encrypted_aes_keys:
+            print("No valid user details found")
+            return
+
+        cid = self.upload_to_ipfs(encrypted_file_path)
+        username = self.get_username()
+
+        for node_name, encrypted_aes_key in encrypted_aes_keys:
+            json_file_path = self.create_json_file(cid, username, encrypted_aes_key, node_name,
+                                                   os.path.basename(file_path))
+            print(f"JSON file created for {node_name} at: {json_file_path}")
 
     def get_user_details(self, nickname):
         try:
             # Attempt to get user details from the server
             conn = pyodbc.connect(
-                'DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.1.101,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
+                'DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.181.90,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM [User] WHERE nickname = ?", nickname)
             row = cursor.fetchone()
@@ -776,7 +789,7 @@ class DashboardWindow(QMainWindow):
 
     def is_server_online(self):
         try:
-            response = requests.get("http://192.168.1.101:5000/online_users")
+            response = requests.get("http://192.168.181.90:5000/online_users")
             return response.status_code == 200
         except requests.RequestException:
             return False
@@ -797,7 +810,7 @@ class DashboardWindow(QMainWindow):
         try:
             if self.is_server_online():
                 conn = pyodbc.connect(
-                    'DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.1.101,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
+                    'DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.181.90,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
                 cursor = conn.cursor()
                 cursor.execute("SELECT nickname FROM [User]")
                 rows = cursor.fetchall()
@@ -828,7 +841,7 @@ class DashboardWindow(QMainWindow):
 
     def update_node_status(self):
         try:
-            response = requests.get('http://192.168.1.101:5000/online_users')
+            response = requests.get('http://192.168.181.90:5000/online_users')
             if response.status_code == 200:
                 online_users = response.json()
                 for i in range(self.nodeList.count()):
@@ -876,7 +889,7 @@ class DatabaseUpdateThread(QThread):
 
     def update_database(self):
         try:
-            response = requests.get('http://192.168.1.101:5000/database')
+            response = requests.get('http://192.168.181.90:5000/database')
             if response.status_code == 200:
                 with open(self.local_db_path, 'w') as f:
                     f.write(response.text)
@@ -982,7 +995,7 @@ class RegisterWindow(QWidget):
             'public_key': public_key_pem
         }
 
-        response = requests.post('http://192.168.1.101:5000/register', json=data)
+        response = requests.post('http://192.168.181.90:5000/register', json=data)
         if response.status_code == 200:
             # Store the username locally
             with open('user_config.json', 'w') as config_file:
@@ -1161,7 +1174,7 @@ class LoginWindow(QWidget):
                     'nonce': nonce,
                     'signature': signature.hex()
                 }
-                response = requests.post('http://192.168.1.101:5000/authenticate', json=auth_data)
+                response = requests.post('http://192.168.181.90:5000/authenticate', json=auth_data)
                 if response.status_code == 200:
                     self.session_token = response.json()['session_token']
                     self.nonce = response.json()['nonce']
@@ -1182,7 +1195,7 @@ class LoginWindow(QWidget):
 
     def is_server_online(self):
         try:
-            response = requests.get("http://192.168.1.101:5000/online_users")
+            response = requests.get("http://192.168.181.90:5000/online_users")
             return response.status_code == 200
         except requests.RequestException:
             return False
