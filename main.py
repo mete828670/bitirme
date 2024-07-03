@@ -301,6 +301,13 @@ class FileDropArea(QLabel):
         self.setAlignment(Qt.AlignCenter)
         self.setAcceptDrops(True)
         self.file_path = None
+
+        # Add a label to show the file name
+        self.file_name_label = QLabel(self)
+        self.file_name_label.setAlignment(Qt.AlignCenter)
+        self.file_name_label.setStyleSheet("color: white; font-size: 14px;")
+        self.file_name_label.setVisible(False)  # Hide initially
+
         upload_icon_path = '/home/mete/Downloads/file_icon.png'
         self.setPixmap(QPixmap(upload_icon_path).scaled(64, 64, Qt.KeepAspectRatio))
         self.setStyleSheet("""
@@ -322,6 +329,8 @@ class FileDropArea(QLabel):
             for url in event.mimeData().urls():
                 if url.isLocalFile():
                     self.file_path = url.toLocalFile()
+                    self.file_name_label.setText(self.file_path)
+                    self.file_name_label.setVisible(True)
                     self.emit_file_dropped(self.file_path)
 
     def emit_file_dropped(self, filepath):
@@ -335,7 +344,10 @@ class FileDropArea(QLabel):
         fname, _ = QFileDialog.getOpenFileName(self, 'Open file', '/home', "All files (*)")
         if fname:
             self.file_path = fname
+            self.file_name_label.setText(self.file_path)
+            self.file_name_label.setVisible(True)
             self.emit_file_dropped(fname)
+
 
 
 class PasswordDialog(QDialog):
@@ -531,21 +543,7 @@ class DashboardWindow(QMainWindow):
         """)
         self.sendButton.clicked.connect(self.on_send_button_clicked)
 
-        self.registerButton = QPushButton('Register', self)
-        self.registerButton.setStyleSheet("""
-                    QPushButton {
-                        background-color: #FFA500;
-                        color: white;
-                        font-size: 18px;
-                        border-radius: 10px;
-                    }
-                    QPushButton:hover {
-                        background-color: #FFB347;
-                    }
-                """)
-        self.registerButton.setFixedSize(200, 40)
-        self.registerButton.move(self.width() - self.registerButton.width() - 20, 20)
-        self.registerButton.clicked.connect(self.on_register_button_clicked)
+
 
         layout.addWidget(splitter, Qt.AlignCenter)
         layout.addWidget(self.sendButton, Qt.AlignCenter)
@@ -576,7 +574,7 @@ class DashboardWindow(QMainWindow):
             user_details = self.get_user_details(node_name)
             if user_details:
                 public_key_str = user_details[-1]
-                email = user_details[3]
+                email = user_details[1]
                 print(f"Public Key for {node_name}: {public_key_str}")  # Debugging statement
                 encrypted_aes_key = self.encrypt_file(public_key_str, file_path, encrypted_file_path)
                 encrypted_aes_keys.append((node_name, encrypted_aes_key))
@@ -617,18 +615,27 @@ class DashboardWindow(QMainWindow):
         msg.exec_()
 
     def get_user_details(self, nickname):
+        # Check if the server is online
         try:
-            # Attempt to get user details from the server
-            conn = pyodbc.connect(
-                'DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.1.101,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM [User] WHERE nickname = ?", nickname)
-            row = cursor.fetchone()
-            conn.close()
-            if row:
-                return row
-        except pyodbc.OperationalError as e:
-            print(f"Server connection failed: {e}")
+            response = requests.get("http://192.168.1.101:5000/online_users")
+            server_online = response.status_code == 200
+        except requests.RequestException:
+            server_online = False
+
+        if server_online:
+            try:
+                conn = pyodbc.connect(
+                    'DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.1.101,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
+                cursor = conn.cursor()
+                cursor.execute("SELECT nickname, email, PublicKey FROM [User] WHERE nickname = ?", nickname)
+                row = cursor.fetchone()
+                conn.close()
+                if row:
+                    return row
+            except pyodbc.OperationalError as e:
+                print(f"Server connection failed: {e}")
+        else:
+            print("Server is offline, falling back to local database")
 
         # Fallback to local database
         return self.get_user_details_from_local(nickname)
