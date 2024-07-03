@@ -450,6 +450,29 @@ class DashboardWindow(QMainWindow):
         layout = QVBoxLayout(self.centralWidget)
 
         self.databaseCheckbox = QCheckBox("Activate Database Download", self)
+
+        self.databaseCheckbox.setStyleSheet("""
+                    QCheckBox {
+                        font-size: 18px;
+                        color: white;
+                        padding: 5px;
+                        border: 2px solid #1E90FF;
+                        border-radius: 10px;
+                        background-color: rgba(30, 144, 255, 0.3);
+                    }
+                    QCheckBox::indicator {
+                        width: 20px;
+                        height: 20px;
+                    }
+                    QCheckBox::indicator:checked {
+                        background-color: #1E90FF;
+                        border: 1px solid white;
+                    }
+                    QCheckBox::indicator:unchecked {
+                        background-color: white;
+                        border: 1px solid #1E90FF;
+                    }
+                """)
         self.databaseCheckbox.stateChanged.connect(self.on_database_checkbox_changed)
         layout.addWidget(self.databaseCheckbox)
 
