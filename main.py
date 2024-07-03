@@ -45,6 +45,18 @@ install_package('libxcb-xinerama0')
 os.environ.pop('QT_QPA_PLATFORM_PLUGIN_PATH', None)
 os.environ.pop('QT_PLUGIN_PATH', None)
 
+class ServerCheckThread(QThread):
+    server_online_signal = pyqtSignal(bool)
+
+    def run(self):
+        try:
+            response = requests.get("http://192.168.1.101:5000/online_users")
+            server_online = response.status_code == 200
+        except requests.RequestException:
+            server_online = False
+        self.server_online_signal.emit(server_online)
+
+
 class SplashScreen(QWidget):
     update_log = pyqtSignal(str)
     update_progress = pyqtSignal(int)
@@ -361,7 +373,7 @@ class DashboardWindow(QMainWindow):
 
         if self.session_token and self.nonce:
             self.heartbeat_thread = HeartbeatThread(
-                "http://192.168.181.90:5000/heartbeat",
+                "http://192.168.1.101:5000/heartbeat",
                 self.session_token,
                 self.nonce,
                 self.private_key,
@@ -404,7 +416,7 @@ class DashboardWindow(QMainWindow):
 
     def download_database(self):
         try:
-            response = requests.get('http://192.168.181.90:5000/database')
+            response = requests.get('http://192.168.1.101:5000/database')
             if response.status_code == 200:
                 with open(self.local_db_path, 'w') as f:
                     f.write(response.text)
@@ -556,15 +568,19 @@ class DashboardWindow(QMainWindow):
 
         encrypted_file_path = file_path + ".enc"
         encrypted_aes_keys = []
+        email_list = []  # List to store node names and emails
+        json_paths = []  # List to store JSON file paths
 
         for item in selected_items:
             node_name = item.text()
             user_details = self.get_user_details(node_name)
             if user_details:
                 public_key_str = user_details[-1]
+                email = user_details[3]
                 print(f"Public Key for {node_name}: {public_key_str}")  # Debugging statement
                 encrypted_aes_key = self.encrypt_file(public_key_str, file_path, encrypted_file_path)
                 encrypted_aes_keys.append((node_name, encrypted_aes_key))
+                email_list.append((node_name, email))  # Append node name and email
             else:
                 print(f"Node details not found for {node_name}")
 
@@ -579,12 +595,32 @@ class DashboardWindow(QMainWindow):
             json_file_path = self.create_json_file(cid, username, encrypted_aes_key, node_name,
                                                    os.path.basename(file_path))
             print(f"JSON file created for {node_name} at: {json_file_path}")
+            json_paths.append(json_file_path)  # Append JSON file path
+
+        self.show_summary_window(email_list, json_paths)  # Show the summary window
+
+    def show_summary_window(self, email_list, json_paths):
+        summary_text = "Emails and JSON File Paths:\n\n"
+
+        for node_name, email in email_list:
+            summary_text += f"{node_name} - {email}\n"
+
+        summary_text += "\nJSON File Paths:\n"
+        for path in json_paths:
+            summary_text += f"{path}\n"
+
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Information)
+        msg.setWindowTitle("Summary")
+        msg.setText(summary_text)
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.exec_()
 
     def get_user_details(self, nickname):
         try:
             # Attempt to get user details from the server
             conn = pyodbc.connect(
-                'DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.181.90,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
+                'DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.1.101,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM [User] WHERE nickname = ?", nickname)
             row = cursor.fetchone()
@@ -789,7 +825,7 @@ class DashboardWindow(QMainWindow):
 
     def is_server_online(self):
         try:
-            response = requests.get("http://192.168.181.90:5000/online_users")
+            response = requests.get("http://192.168.1.101:5000/online_users")
             return response.status_code == 200
         except requests.RequestException:
             return False
@@ -810,7 +846,7 @@ class DashboardWindow(QMainWindow):
         try:
             if self.is_server_online():
                 conn = pyodbc.connect(
-                    'DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.181.90,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
+                    'DRIVER={ODBC Driver 17 for SQL Server};SERVER=192.168.1.101,1435;DATABASE=FileSharingDB;UID=sa;PWD=MeTe14531915.;TrustServerCertificate=yes')
                 cursor = conn.cursor()
                 cursor.execute("SELECT nickname FROM [User]")
                 rows = cursor.fetchall()
@@ -841,7 +877,7 @@ class DashboardWindow(QMainWindow):
 
     def update_node_status(self):
         try:
-            response = requests.get('http://192.168.181.90:5000/online_users')
+            response = requests.get('http://192.168.1.101:5000/online_users')
             if response.status_code == 200:
                 online_users = response.json()
                 for i in range(self.nodeList.count()):
@@ -889,7 +925,7 @@ class DatabaseUpdateThread(QThread):
 
     def update_database(self):
         try:
-            response = requests.get('http://192.168.181.90:5000/database')
+            response = requests.get('http://192.168.1.101:5000/database')
             if response.status_code == 200:
                 with open(self.local_db_path, 'w') as f:
                     f.write(response.text)
@@ -995,7 +1031,7 @@ class RegisterWindow(QWidget):
             'public_key': public_key_pem
         }
 
-        response = requests.post('http://192.168.181.90:5000/register', json=data)
+        response = requests.post('http://192.168.1.101:5000/register', json=data)
         if response.status_code == 200:
             # Store the username locally
             with open('user_config.json', 'w') as config_file:
@@ -1044,6 +1080,7 @@ class LoginWindow(QWidget):
         self.session_token = None
         self.nonce = None
         self.private_key = None
+        self.nickname = None  # Add this line to initialize nickname
         self.initUI()
 
     def initUI(self):
@@ -1058,20 +1095,6 @@ class LoginWindow(QWidget):
         inputContainer = QVBoxLayout()
         inputContainer.setSpacing(3)
         inputContainer.setContentsMargins(90, 150, 60, 50)
-
-        self.emailInput = QLineEdit()
-        self.emailInput.setPlaceholderText("e-mail")
-        self.emailInput.setFixedSize(300, 40)
-        self.emailInput.setStyleSheet("""
-            QLineEdit {
-                background-color: white;
-                color: black;
-                border: 1px solid gray;
-                border-radius: 0px;
-                padding: 10px;
-                font-size: 16px;
-            }
-        """)
 
         self.passwordInput = QLineEdit()
         self.passwordInput.setPlaceholderText("password")
@@ -1125,7 +1148,6 @@ class LoginWindow(QWidget):
         """)
         self.registerButton.clicked.connect(self.on_register_button_clicked)
 
-        inputContainer.addWidget(self.emailInput)
         inputContainer.addWidget(self.passwordInput)
         inputContainer.addWidget(self.loginButton)
         inputContainer.addWidget(spacerItem)
@@ -1148,57 +1170,55 @@ class LoginWindow(QWidget):
         with open('user_config.json', 'r') as config_file:
             user_config = json.load(config_file)
 
-        nickname = user_config['nickname']
-        private_key_path = f'{nickname}_private_key.pem'
+        self.nickname = user_config['nickname']  # Update self.nickname here
+        private_key_path = f'{self.nickname}_private_key.pem'
 
         try:
             # Load the recipient's private key
             with open(private_key_path, 'rb') as key_file:
                 self.private_key = serialization.load_pem_private_key(key_file.read(), password=password.encode())
 
-            # Try to authenticate with the server
-            if self.is_server_online():
-                print("Attempting server authentication...")
-                # Create the initial authentication data
-                timestamp = str(int(time.time()))
-                nonce = secrets.token_hex(16)
-                data_to_sign = nickname + timestamp + nonce
-                signature = self.private_key.sign(
-                    data_to_sign.encode(),
-                    padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
-                    hashes.SHA256()
-                )
-                auth_data = {
-                    'username': nickname,
-                    'timestamp': timestamp,
-                    'nonce': nonce,
-                    'signature': signature.hex()
-                }
-                response = requests.post('http://192.168.181.90:5000/authenticate', json=auth_data)
-                if response.status_code == 200:
-                    self.session_token = response.json()['session_token']
-                    self.nonce = response.json()['nonce']
-                    print("Login successful (server authenticated)")
-                    self.dashboard = DashboardWindow(session_token=self.session_token, nonce=self.nonce,
-                                                     private_key=self.private_key)
-                    self.dashboard.show()
-                    self.hide()
-                else:
-                    print("Authentication failed")
-            else:
-                print("Server is offline, falling back to local authentication")
-                self.dashboard = DashboardWindow(private_key=self.private_key)
-                self.dashboard.show()
-                self.hide()
+            # Check if server is online in a separate thread
+            self.server_check_thread = ServerCheckThread()
+            self.server_check_thread.server_online_signal.connect(self.on_server_check_finished)
+            self.server_check_thread.start()
         except Exception as e:
             print(f"Login failed: {str(e)}")
 
-    def is_server_online(self):
-        try:
-            response = requests.get("http://192.168.181.90:5000/online_users")
-            return response.status_code == 200
-        except requests.RequestException:
-            return False
+    def on_server_check_finished(self, server_online):
+        if server_online:
+            print("Attempting server authentication...")
+            # Create the initial authentication data
+            timestamp = str(int(time.time()))
+            nonce = secrets.token_hex(16)
+            data_to_sign = self.nickname + timestamp + nonce  # Use self.nickname
+            signature = self.private_key.sign(
+                data_to_sign.encode(),
+                padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+                hashes.SHA256()
+            )
+            auth_data = {
+                'username': self.nickname,  # Use self.nickname
+                'timestamp': timestamp,
+                'nonce': nonce,
+                'signature': signature.hex()
+            }
+            response = requests.post('http://192.168.1.101:5000/authenticate', json=auth_data)
+            if response.status_code == 200:
+                self.session_token = response.json()['session_token']
+                self.nonce = response.json()['nonce']
+                print("Login successful (server authenticated)")
+                self.dashboard = DashboardWindow(session_token=self.session_token, nonce=self.nonce,
+                                                 private_key=self.private_key)
+                self.dashboard.show()
+                self.hide()
+            else:
+                print("Authentication failed")
+        else:
+            print("Server is offline, falling back to local authentication")
+            self.dashboard = DashboardWindow(private_key=self.private_key)
+            self.dashboard.show()
+            self.hide()
 
     def centerWindow(self):
         qr = self.frameGeometry()
