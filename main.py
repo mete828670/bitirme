@@ -265,8 +265,7 @@ class IPFSInitializer(QThread):
                     subprocess.run([ipfs_path, 'repo', 'gc'], capture_output=True, text=True)
                     self.log_signal.emit(f"Removed test file with CID: {cid}")
 
-                    # Clean up the test file
-                    os.remove(test_file_path)
+
                 else:
                     self.log_signal.emit(f"Failed to retrieve test file: {result.stderr}")
             else:
@@ -805,6 +804,12 @@ class DashboardWindow(QMainWindow):
         if result.returncode != 0:
             raise Exception(f"Failed to download file from IPFS: {result.stderr}")
         print(f"File downloaded from IPFS: {output_file_path}")
+
+        # Pin the file to ensure it remains available
+        pin_result = subprocess.run(['ipfs', 'pin', 'add', cid], capture_output=True, text=True)
+        if pin_result.returncode != 0:
+            raise Exception(f"Failed to pin file: {pin_result.stderr}")
+        print(f"File pinned with CID: {cid}")
 
     def decrypt_file(self, encrypted_file_path, output_file_path, encrypted_aes_key_b64):
         try:
